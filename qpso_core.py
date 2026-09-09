@@ -36,7 +36,7 @@ import time
 
 import networkx as nx
 
-from decode import fitness, fitness_with_feedback, route_all_vehicles
+from decode import route_all_vehicles, score_function
 
 
 def _clip(value: float, lo: float, hi: float) -> float:
@@ -112,10 +112,7 @@ def run_qpso(
         raise ValueError(f"scoring must be 'static' or 'flow', got {scoring!r}")
 
     # decode routes, then score under the chosen objective
-    def score(routes: dict) -> float:
-        if scoring == "static":
-            return fitness(G, routes)
-        return fitness_with_feedback(G, routes, capacity, alpha=alpha, beta=beta)
+    score = score_function(G, scoring=scoring, capacity=capacity, alpha=alpha, beta=beta)
 
     edges = sorted(candidate_edges)
     rng = random.Random(seed)

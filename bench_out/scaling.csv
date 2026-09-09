@@ -1,0 +1,7 @@
+size,method,mean_runtime_sec,n_configs
+4x4,qpso,0.1323,8
+4x4,pso,0.128,8
+4x4,ga,0.135,8
+6x6,qpso,0.2502,8
+6x6,pso,0.2419,8
+6x6,ga,0.2446,8

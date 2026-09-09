@@ -1,0 +1,3 @@
+hub_ratio,mode,mean_reduction_ratio,n_configs
+0.0,random,0.8917,24
+9.0,clustered,0.8484,24

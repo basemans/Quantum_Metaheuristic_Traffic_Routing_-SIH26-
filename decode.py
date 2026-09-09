@@ -249,6 +249,28 @@ def evaluate(
     return routes, fitness(G, routes)
 
 
+def score_function(
+    G: nx.DiGraph,
+    scoring: str = "static",
+    capacity: float = None,
+    alpha: float = 0.15,
+    beta: float = 4.0,
+):
+    """Returns a route-set -> fitness callable shared by ALL optimizers
+    (QPSO, classical PSO, GA) so the benchmark is apples-to-apples.
+
+    scoring="static": fitness(G, routes)  (decomposable; Section 6)
+    scoring="flow"  : fitness_with_feedback (BPR; non-decomposable)
+    """
+    if scoring not in ("static", "flow"):
+        raise ValueError(f"scoring must be 'static' or 'flow', got {scoring!r}")
+    if scoring == "static":
+        return lambda routes: fitness(G, routes)
+    if capacity is None:
+        raise ValueError("scoring='flow' requires a positive `capacity`")
+    return lambda routes: fitness_with_feedback(G, routes, capacity, alpha=alpha, beta=beta)
+
+
 if __name__ == "__main__":
     from network_generator import create_grid_network
     from vehicle_generator import create_vehicles
