@@ -73,19 +73,28 @@ def build_candidate_edge_set(
     k_min: int = 5,
     k_max: int = 15,
     variance_at_kmax: float = 0.1,
+    full_map_threshold: float = 0.7,
     verbose: bool = True
 ) -> dict:
     """
     Runs Phase 0 for a full vehicle list.
 
+    Parameters
+    ----------
+    full_map_threshold : if the reduction ratio reaches/exceeds this value,
+        the candidate set is replaced by the ENTIRE edge set (union pruning is
+        buying nothing, so routing/search resumes on the full map). This keeps
+        the dimensionality guarantee "|candidate| <= threshold * |E|".
+
     Returns
     -------
     dict with:
-        candidate_edges : set of (u, v) tuples
+        candidate_edges : set of (u, v) tuples (all edges if fallback fired)
         k_used          : the dynamic k value used for this run
         per_vehicle_paths : {vehicle_id: [path, path, ...]}  (kept for
                              potential later use / debugging)
         reduction_ratio : |candidate_edges| / |E(G)|
+        full_map_fallback : True if the threshold cut in
     """
     from traffic_simulation import congestion_variance
 
@@ -110,10 +119,18 @@ def build_candidate_edge_set(
     total_edges = G.number_of_edges()
     reduction_ratio = len(candidate_edges) / total_edges if total_edges else 0.0
 
+    fallback = reduction_ratio >= full_map_threshold
+    if fallback:
+        candidate_edges = set(G.edges())
+        reduction_ratio = 1.0
+
     if verbose:
         print(f"Congestion variance: {var:.5f}  ->  dynamic k = {k}")
         print(f"Candidate edges: {len(candidate_edges)} / {total_edges} "
               f"total  (reduction_ratio = {reduction_ratio:.3f})")
+        if fallback:
+            print(f"  [full-map fallback] reduction_ratio {reduction_ratio:.3f} >= "
+                  f"threshold {full_map_threshold:.2f} -> using every edge")
         if unreachable:
             print(f"WARNING: {len(unreachable)} vehicle(s) have no path: {unreachable}")
 
@@ -122,6 +139,7 @@ def build_candidate_edge_set(
         "k_used": k,
         "per_vehicle_paths": per_vehicle_paths,
         "reduction_ratio": reduction_ratio,
+        "full_map_fallback": fallback,
     }
 
 

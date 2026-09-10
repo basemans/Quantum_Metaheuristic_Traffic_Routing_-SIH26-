@@ -1,0 +1,7 @@
+size,method,mean_runtime_sec,n_configs
+8x8,qpso,0.2978,8
+8x8,pso,0.2923,8
+8x8,ga,0.2902,8
+15x15,qpso,0.6128,8
+15x15,pso,0.5935,8
+15x15,ga,0.5976,8

@@ -95,11 +95,18 @@ def flow_edge_cost(
     beta: float = 4.0
 ) -> float:
     """Flow-dependent true cost of edge (u, v):
-    base_length * base_congestion * BPR(flow)."""
+    base_length * base_congestion * BPR(flow).
+
+    Capacity resolution: if the edge carries a per-edge 'capacity' attribute
+    (set by real_network_adapter for OSM roads, from lanes x road class), that
+    physical value overrides the scalar `capacity` argument (which remains the
+    fallback for synthetic grids).
+    """
     data = G.edges[u, v]
     base_factor = data["congestion_factor"]
+    edge_capacity = data.get("capacity", capacity)
     return data["base_length"] * base_factor * flow_load_multiplier(
-        flow, capacity, alpha, beta
+        flow, edge_capacity, alpha, beta
     )
 
 

@@ -1,14 +1,14 @@
 # Quantum_Metaheuristic_Traffic_Routing_-SIH26-
 
-Quantum-Inspired Particle Swarm Optimization (QPSO) for coordinated traffic routing on synthetic grid networks, benchmarked against classical PSO and a genetic algorithm (GA) under flow-dependent (BPR) congestion.
+Quantum-Inspired Particle Swarm Optimization (QPSO) for coordinated traffic routing on synthetic grid networks, benchmarked against classical PSO and a genetic algorithm (GA) under flow-dependent (BPR) congestion. An optional real-world stage ingests small OpenStreetMap districts and runs the same pipeline unchanged on real road geometry.
 
-This README explains **what every Python file in the project does**: its role in the pipeline, its inputs, what it computes, and what it returns. Formal definitions and derivations live in [`docs/MATHEMATICAL_GUIDE.md`](docs/MATHEMATICAL_GUIDE.md); the project overview, benchmark results, and presentation notes live in [`docs/PROJECT_AND_PRESENTATION.md`](docs/PROJECT_AND_PRESENTATION.md). The behavior described below is verified by the assertion-based test suites (`test_*.py`).
+This README explains **what every Python file in the project does**: its role in the pipeline, its inputs, what it computes, and what it returns. Formal definitions and derivations live in [`docs/MATHEMATICAL_GUIDE.md`](docs/MATHEMATICAL_GUIDE.md); the project overview, benchmark results, and presentation notes live in [`docs/PROJECT_AND_PRESENTATION.md`](docs/PROJECT_AND_PRESENTATION.md); the full experimental log (what was tried, what failed, all measured results) lives in [`docs/RESEARCH_DOCUMENTATION.md`](docs/RESEARCH_DOCUMENTATION.md). The behavior described below is verified by the assertion-based test suites (`test_*.py`).
 
 ---
 
 ## Pipeline overview
 
-The optimization pipeline is built in five stages plus a benchmarking layer. The dependency order below is also the order in which the files should be read:
+The optimization pipeline is built in five stages plus a benchmarking layer, with an optional real-world front end. The dependency order below is also the order in which the files should be read:
 
 ```
 network_generator.py ──> vehicle_generator.py ──> traffic_simulation.py
@@ -20,11 +20,14 @@ network_generator.py ──> vehicle_generator.py ──> traffic_simulation.py
               qpso_core.py (QPSO)  |  baselines.py (PSO, GA)
                             │
                    benchmark.py (harness)
+
+real-world front end (replaces grid + synthetic demand):
+      real_network_adapter.py  ──>  real_od_generator.py
 ```
 
-1. **Network** (`network_generator.py`) — builds the road graph (nodes + directed edges).
-2. **Demand** (`vehicle_generator.py`) — creates the `(start, destination)` pairs.
-3. **Traffic** (`traffic_simulation.py`) — perturbs edges with static congestion, and later prices link flows.
+1. **Network** (`network_generator.py`) — builds the road graph (nodes + directed edges). *Real-world alternative:* `real_network_adapter.py` downloads an OSM district in the same graph contract.
+2. **Demand** (`vehicle_generator.py`) — creates the `(start, destination)` pairs. *Real-world alternative:* `real_od_generator.py` derives Jaipur-specific trips from real land use.
+3. **Traffic** (`traffic_simulation.py`) — perturbs edges with static congestion, and later prices link flows (BPR).
 4. **Phase 0** (`candidate_set.py`) — shrinks the search space to a per-vehicle candidate edge set.
 5. **Decode + fitness** (`decode.py`) — turns a bias vector into real routes and scores them.
 6. **Optimizers** (`qpso_core.py`, `baselines.py`) — search the bias space.
@@ -81,7 +84,7 @@ network_generator.py ──> vehicle_generator.py ──> traffic_simulation.py
 
 - `route_flows(routes) -> dict` — counts, for each directed edge, how many routed vehicles traverse it: maps `routes` to `{(u, v): count}`.
 - `flow_load_multiplier(flow, capacity, alpha=0.15, beta=4.0) -> float` — the BPR multiplier `m(f) = 1 + α·(f/c)^β`; `m = 1.0` at zero flow, superlinear growth as flow approaches capacity.
-- `flow_edge_cost(G, u, v, flow, capacity, alpha=0.15, beta=4.0) -> float` — `base_length × base_congestion_factor × m(flow)`.
+- `flow_edge_cost(G, u, v, flow, capacity, alpha=0.15, beta=4.0) -> float` — `base_length × base_congestion_factor × m(flow)`. **Capacity resolution:** if the edge carries its own `capacity` attribute (set by `real_network_adapter.attach_physical_capacity` from OSM lanes × road class), that physical value overrides the scalar `capacity` argument, which remains the fallback for synthetic grids (where `capacity = Nᵥ/3`).
 
 **Running it (`__main__`):** on a 4×4 grid prints `variance = 0.0` before congestion, then `variance = 0.0233…` after `variance_level=0.3`, plus five sample edge `congestion_factor` values.
 
@@ -96,9 +99,10 @@ network_generator.py ──> vehicle_generator.py ──> traffic_simulation.py
 - `dynamic_k(congestion_var, k_min=5, k_max=15, variance_at_kmax=0.1) -> int` — maps congestion variance to how many paths to precompute per vehicle: `k = k_min + min(var/variance_at_kmax, 1)·(k_max − k_min)`, rounded; `k = k_min` if `var <= 0`. More volatile congestion ⇒ more alternates (placeholder mapping — an open question).
 - `vehicle_k_shortest_paths(G, start, destination, k) -> list` — up to `k` loopless shortest paths ranked by `true_cost`, via `networkx.shortest_simple_paths` (Yen's algorithm).
 - `edges_in_path(path) -> set` — `{(path[i], path[i+1])}`.
-- `build_candidate_edge_set(G, vehicles, k_min, k_max, variance_at_kmax, verbose=True) -> dict`
-  - **Returns:** `candidate_edges` (set of `(u,v)`), `k_used`, `per_vehicle_paths` (`{id: [paths]}`), `reduction_ratio = |candidate_edges| / |E|`. Vehicles with no path are reported as unreachable.
+- `build_candidate_edge_set(G, vehicles, k_min, k_max, variance_at_kmax, full_map_threshold=0.7, verbose=True) -> dict`
+  - **Returns:** `candidate_edges` (set of `(u,v)`), `k_used`, `per_vehicle_paths` (`{id: [paths]}`), `reduction_ratio = |candidate_edges| / |E|`, and `full_map_fallback` (`True` iff the fallback cut in). Vehicles with no path are reported as unreachable.
   - **Guarantee:** every vehicle's own shortest path is always among its `k` paths, so identity-bias routing over the candidate subgraph equals un-restricted full-graph routing — the reduction never makes the greedy baseline worse.
+  - **Full-map fallback:** under dense demand the union can cover most of the graph (the reduction buys nothing). If `reduction_ratio ≥ full_map_threshold` (default `0.7`), the candidate set is replaced by **every edge** of the graph, `reduction_ratio` is reported as `1.0`, and routing/search proceed on the full map.
 
 **Running it (`__main__`):** on a 6×6 grid with `variance_level=0.3` prints, per demand mode, `Congestion variance: 0.02684 -> dynamic k = 8` and the candidate-edge counts, then a `COMPARISON` block: random `reduction_ratio = 0.700` (84/120), clustered `0.417` (50/120).
 
@@ -186,7 +190,44 @@ x_new ← clip(x_new, 0.5, 1.5)
 
 ---
 
-## 9. Test files — no-framework assertion suites
+## 9. `real_network_adapter.py` — real-road ingestion (OSM)
+
+**Role.** Replaces the synthetic grid with a **real street network** downloaded from OpenStreetMap, converted into the exact same graph contract as `create_grid_network` (`nodes` with `x`/`y` in projected metres; directed edges with `base_length` and `congestion_factor`), so the whole pipeline (4–8 above) runs unchanged. Requires `osmnx` + `geopandas`/`shapely`/`pyproj` (extra dependencies over the synthetic path).
+
+**Conversion choices** (documented in the file docstring):
+- `network_type='drive'` — drivable roads only; `simplify=True` contracts OSM geometry into intersection nodes;
+- parallel/duplicate OSM edges merged to the shortest `length`; **zero-length edges dropped** (otherwise `true_cost / base_length` in the A*-heuristic scale would divide by zero);
+- largest **weakly-connected** component retained (a skeleton path exists between any two nodes in the undirected sense);
+- road metadata kept (`highway`, `lanes`, `oneway`) for the physical-capacity pass.
+
+**Functions.**
+
+- `_to_simple_digraph(Gp) -> nx.DiGraph` — the OSM → project DiGraph conversion.
+- `attach_physical_capacity(G) -> None` — adds a per-edge `capacity` (vehicles/hour) = `lanes × per-lane(road class)`, **halved for two-way streets**. `flow_edge_cost` (see §3) honours this attribute over the scalar `Nᵥ/3` fallback — this is what makes congestion meaningful at realistic per-hour demand instead of scaling away.
+- `load_osm_network(center=None, dist=1200.0, network_type='drive', simplify=True, physical_capacity=False) -> dict` — the entry point; returns `G`, `center`, `dist_m`, raw/adapted node+edge counts, and the CRS. Default center is Jaipur city centre `(26.9124, 75.7873)`.
+
+**Running it (`__main__`):** a full end-to-end pipeline demo on real roads. Flags: `--center LAT LON`, `--dist`, `--vehicles`, `--od {synthetic,realistic}`, `--physical-capacity`, `--pop`, `--iters`, `--verbose`. Prints the network stats, demand summary, Phase-0 reduction, greedy UE flow fitness, and the QPSO improvement. Example (the physically consistent realistic test, see the research doc):
+
+```
+python real_network_adapter.py --vehicles 5000 --od realistic --physical-capacity --pop 8 --iters 10
+```
+
+---
+
+## 10. `real_od_generator.py` — realistic Jaipur-specific O–D demand
+
+**Role.** Produces demand that means something physically: trips from **residential** areas to **education/office/commercial** destinations, instead of uniform random pairs. Jaipur-specific by design, hence kept in its own module rather than `vehicle_generator.py`.
+
+**Functions.**
+
+- `_category_nodes(G, center, dist, crs, lonlat, tags, label) -> list` — fetches OSM features matching a tag query (e.g. `landuse: residential`, or `amenity: school/college/university/…`), snaps each feature (`representative_point()` for polygons) to its **nearest road node** via haversine over the inverse-projected node set; falls back to all nodes if the district has none of that category.
+- `create_realistic_vehicles(G, center, dist=1000.0, num_vehicles=1000, crs='EPSG:32643', seed=None) -> list` — returns the standard contract `{"id", "start", "destination"}` with origins sampled from residential nodes and destinations from education/office/commercial nodes (distinct from origin). Measured on the mapped Jaipur district: 11 residential gateway nodes, 63 destination nodes.
+
+Note: with real one-way streets, ~3–12% of sampled pairs are directed-unreachable; the adapter demo reports and drops those (the flow objective requires each demand to be achievable).
+
+---
+
+## 11. Test files — no-framework assertion suites
 
 All are run directly (`python test_*.py`) and print `ok N - …` per check followed by a PASSED banner. They construct a fresh network/vehicles/candidate set per test with fixed seeds, so failures are deterministic.
 
@@ -198,8 +239,10 @@ All are run directly (`python test_*.py`) and print `ok N - …` per check follo
 
 ## How to run
 
-- **Dependencies:** Python 3.13+ and `networkx` (`pip install networkx`).
-- **Pipeline demo:** `python qpso_core.py` (it builds Everything: network → vehicles → congestion → Phase 0 → decode → QPSO).
+- **Dependencies (synthetic path):** Python 3.13+ and `networkx` (`pip install networkx`).
+- **Dependencies (real-road path):** `osmnx`, `geopandas`, `shapely`, `pyproj` (`pip install osmnx` pulls these transitively). Roads are fetched live from OpenStreetMap on first use.
+- **Pipeline demo (synthetic):** `python qpso_core.py` (it builds Everything: network → vehicles → congestion → Phase 0 → decode → QPSO).
+- **Pipeline demo (real roads):** `python real_network_adapter.py --od realistic --physical-capacity --vehicles 5000 --pop 8 --iters 10` (or `--od synthetic --vehicles 10` for the small showcase).
 - **Verify:** `python test_decode.py`, `python test_qpso.py`, `python test_baselines.py`.
 - **Benchmark:** `python benchmark.py` (full sweep) or `python benchmark.py --quick` (smoke).
-- **Docs:** see [`docs/MATHEMATICAL_GUIDE.md`](docs/MATHEMATICAL_GUIDE.md) for derivations and the worked example, `docs/PROJECT_AND_PRESENTATION.md` for results.
+- **Docs:** see [`docs/MATHEMATICAL_GUIDE.md`](docs/MATHEMATICAL_GUIDE.md) for derivations and the worked example, `docs/PROJECT_AND_PRESENTATION.md` for results and presentation notes, and `docs/RESEARCH_DOCUMENTATION.md` for the full experimental history.
